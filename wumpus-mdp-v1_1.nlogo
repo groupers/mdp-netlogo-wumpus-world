@@ -33,7 +33,7 @@ globals [grabbed steps score renew?]
 patches-own [am-pit? am-breezy? am-smelly? am-gold? am-wumpus? value]
 
 ;; here you can add state information to be used by the agent
-agents-own [previous-move]
+agents-own [previous-move initialized]
 
 ;;----------------------------------------------------------------------------
 ;;
@@ -466,11 +466,11 @@ to move-agent
 end
 
 ; just have to add probablility  params for undeterministic
-to update-board-deterministic
-  let reward 0.04
-  let gamma 1
+to update-board
+  let reward -0.08
+  let gamma 0.9
   let next-round-patchs []
-  ask patches [
+  ask patches in-radius 10 [
     default-set
     if(not am-pit? and not am-gold?)[
      let current-values []
@@ -478,6 +478,7 @@ to update-board-deterministic
       ask neighbors4 [
         set current-values lput value current-values
       ]
+      ; Similar to applying max(n,e,w,s)
       set highest-value (last (sort current-values))
       let current-patch []
       set current-patch lput pxcor current-patch
@@ -487,25 +488,28 @@ to update-board-deterministic
       set next-round-patchs lput current-patch next-round-patchs
     ]
   ]
+  let position-in-array 0
+  ask patches in-radius 10 [
+    if(not am-pit? and not am-gold?)[
+      foreach next-round-patchs [
+        if( (item 0 ? = pxcor) and item 1 ? = pycor)[
+          set value (item 2 ?)
+          set position-in-array (position-in-array + 1)
+        ]
+      ]
+    ]
+  ]
 end
-;; TODO :
-;; on first run set default-set on all patches
-;; call update-board-d.. 1000
-;; run check if change in board state if wumpus moves or gold is removed run update-board 10 times in that case
-;; Thats all folks
-
-;; undeterministic
-;; change the update-board to pass params
 
 to default-set
-   if(am-pit?)[
-   set value (-50)
+ if(am-pit?)[
+   set value (-100)
  ]
  if(am-wumpus?)[
-   set value (-20)
+   set value (-5)
  ]
  if(am-gold?)[
-   set value (-5)
+   set value (10)
  ]
 end
 
@@ -513,53 +517,39 @@ end
 ;;
 ;; what you have to write
 to move-deterministic
-let reward -0.04
-let gamma 1
-
-let current-collection-patchs []
-
-
-; Gets von Neumann neighborhood of range 1
-;ask neighbors4 [
-;  default-set
-; let current-values []
-;  ask neighbors4 [
-;    default-set
-;    set current-values lput value current-values
-;  ]
-;  set current-values (sort current-values)
-;  if(not am-pit? and not am-gold?)[
-;    set value ((reward) + gamma * (last current-values))
-;  ]
-;]
-;let neighborsValues []
-; set neighborsValues lput north-value neighborsValues
-; set neighborsValues lput west-value neighborsValues
-; set neighborsValues lput south-value neighborsValues
-; set neighborsValues lput east-value neighborsValues
-;let highest-value (last (sort neighborsValues))
-;if(here-value < highest-value)
-;[
-;  ifelse (north-value = highest-value)[
-;    north
-;  ][ ifelse (west-value = highest-value)[
-;     west
-;   ][ ifelse (south-value = highest-value)[
-;      south
-;    ][
-;      east
-;    ]
-;   ]
-;  ]
-;]
-;if( not glitters?)[
-;ask patch-here [set value (( reward) + gamma * (highest-value))]
-;]
-;if(glitters?) [
-;   grab-gold
-;   ask patch-here [ set value -100]
-;   ask neighbors4 [ set value -5]
-; ]
+if(initialized = 0)[
+  repeat 50 [
+    update-board
+  ]
+  set initialized true
+]
+if(glitters?) [
+   grab-gold
+   ask patch-here [ set value 0]
+   repeat 20 [
+     update-board
+   ]
+ ]
+let neighborsValues []
+ set neighborsValues lput north-value neighborsValues
+ set neighborsValues lput west-value neighborsValues
+ set neighborsValues lput south-value neighborsValues
+ set neighborsValues lput east-value neighborsValues
+let highest-value (last (sort neighborsValues))
+  ifelse (north-value = highest-value)[
+    north
+  ][ ifelse (west-value = highest-value)[
+     west
+   ][ ifelse (south-value = highest-value)[
+      south
+    ][
+      east
+    ]
+   ]
+  ]
+   repeat 5 [
+     update-board
+   ]
 
 end
 
@@ -640,7 +630,7 @@ pits
 pits
 0
 20
-6
+20
 1
 1
 NIL
@@ -655,7 +645,7 @@ gold
 gold
 0
 10
-4
+10
 1
 1
 NIL
@@ -755,7 +745,7 @@ number-of-agents
 number-of-agents
 0
 10
-1
+4
 1
 1
 NIL
