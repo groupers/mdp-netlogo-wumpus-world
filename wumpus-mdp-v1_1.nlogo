@@ -30,7 +30,7 @@ globals [grabbed steps score renew?]
 ;; to store the value of the agent being in that state.
 ;;
 ;; you cam add additional attributes as you wish
-patches-own [am-pit? am-breezy? am-smelly? am-gold? am-wumpus? value]
+patches-own [am-pit? am-breezy? am-smelly? am-gold? am-wumpus? value policy]
 
 ;; here you can add state information to be used by the agent
 agents-own [previous-move initialized]
@@ -393,6 +393,8 @@ to west
     ]
   set steps steps + 1
 end
+;; doing the move 0.8, going forward 0.1, going back 0.1
+;;
 
 ;; east
 ;;
@@ -436,6 +438,7 @@ end
 ;; get-patch-utility
 ;;
 ;; what you have to write
+;; Not necessary implementation down below as an update method.
 to get-patch-utility
 end
 
@@ -465,36 +468,110 @@ to move-agent
   ]
 end
 
-; just have to add probablility  params for undeterministic
 to update-board
-  let reward -0.08
-  let gamma 0.9
+  let reward -0.01
+  let gamma 0.98
   let next-round-patchs []
-  ask patches in-radius 10 [
+  let is-non-deterministic false
+  let left-wing-prob 0.1
+  let right-wing-prob 0.1
+  let action-prob 0.8
+  ask patches in-radius 30 [
     default-set
-    if(not am-pit? and not am-gold?)[
+    if(not am-pit? and not am-gold? and not am-wumpus?)[
      let current-values []
+     ;; Current values with the ordering north 1, east 2, west 3, south 4
+     let order-news [-1 -1 -1 -1]
+     ;;undeterministic current expected values
+     let undet-exp-vals []
      let highest-value 0
+     let currentx pxcor
+     let currenty pycor
+     ; If one of the neighbors is : x += 0 and y += 1 : north
+     ; If one of the neighbors is : x += 1 and y += 0 : east
+     ; If one of the neighbors is : x += -1 and y += 0 : west
+     ; If one of the neighbors is : x += 0 and y += -1 : south
       ask neighbors4 [
+        ifelse agent-move = "non-deterministic" [
+          set is-non-deterministic true
+         ifelse (pycor - currenty = 1)[
+          set order-news replace-item 0 order-news value
+         ][
+          ifelse (pxcor - currentx = 1)[
+           set order-news replace-item 1 order-news value
+          ][
+           if(pycor - currenty = -1)[
+             set order-news replace-item 2 order-news value
+           ]
+           if(pxcor - currentx = 1)[
+             set order-news replace-item 3 order-news value
+           ]
+          ]
+         ]
+        ][
         set current-values lput value current-values
+        ]
       ]
-      ; Similar to applying max(n,e,w,s)
-      set highest-value (last (sort current-values))
+      ;Similar to applying maxΣPR(s'|s,a)U(s') for non deterministic
+      ifelse (is-non-deterministic) [
+       ; Replace the negative value which is an impossible move by the value of the current position, as it cannot move to there.
+       if(item 0 order-news = -1)[
+         set order-news replace-item 0 order-news value
+       ]
+       if(item 1 order-news = -1)[
+         set order-news replace-item 1 order-news value
+       ]
+       if(item 2 order-news = -1)[
+         set order-news replace-item 2 order-news value
+       ]
+       if(item 3 order-news = -1)[
+         set order-news replace-item 3 order-news value
+       ]
+       ;North estimation ex: 0.8*north + 0.1*west + 0.1*east
+       set undet-exp-vals lput (action-prob * (item 0 order-news) + left-wing-prob * (item 2 order-news) + right-wing-prob * (item 1 order-news)) undet-exp-vals
+       ;East estimation ex: 0.8*east + 0.1*north + 0.1*south
+       set undet-exp-vals lput (action-prob * (item 1 order-news) + left-wing-prob * (item 0 order-news) + right-wing-prob * (item 3 order-news)) undet-exp-vals
+       ;West estimation ex: 0.8*west + 0.1*south + 0.1*north
+       set undet-exp-vals lput (action-prob * (item 2 order-news) + left-wing-prob * (item 3 order-news) + right-wing-prob * (item 0 order-news)) undet-exp-vals
+       ;South estimation ex: 0.8*south + 0.1*east + 0.1*west
+       set undet-exp-vals lput (action-prob * (item 3 order-news) + left-wing-prob * (item 1 order-news) + right-wing-prob * (item 2 order-news)) undet-exp-vals
+       set highest-value (last (sort undet-exp-vals))
+      ][
+       ; Similar to applying max(n,e,w,s) for deterministic
+       set highest-value (last (sort current-values))
+      ]
       let current-patch []
       set current-patch lput pxcor current-patch
       set current-patch lput pycor current-patch
+      ; Bellman's equation
       let bellman-value (reward + gamma * (highest-value))
+
+  if agent-move = "non-deterministic" [
+     ifelse ((item 0 undet-exp-vals) = highest-value)[
+       set policy "^"
+     ][
+      ifelse ((item 2 undet-exp-vals) = highest-value)[
+       set policy "<"
+      ][
+       ifelse ((item 3 undet-exp-vals) = highest-value)[
+        set policy "v"
+       ][
+        set policy ">"
+        ]
+       ]
+      ]
+  ]
+      set plabel policy
       set current-patch lput bellman-value current-patch
       set next-round-patchs lput current-patch next-round-patchs
     ]
   ]
-  let position-in-array 0
-  ask patches in-radius 10 [
-    if(not am-pit? and not am-gold?)[
+
+  ask patches in-radius 30 [
+    if(not am-pit? and not am-gold? and not am-wumpus?)[
       foreach next-round-patchs [
         if( (item 0 ? = pxcor) and item 1 ? = pycor)[
           set value (item 2 ?)
-          set position-in-array (position-in-array + 1)
         ]
       ]
     ]
@@ -502,15 +579,61 @@ to update-board
 end
 
 to default-set
+
  if(am-pit?)[
-   set value (-100)
+   set value (-8)
  ]
  if(am-wumpus?)[
-   set value (-5)
+   set value (-6)
  ]
+
  if(am-gold?)[
-   set value (10)
+   ifelse agent-move = "non-deterministic" [
+    set value (0)
+   ][
+    set value (1)
+   ]
  ]
+end
+
+to do-move
+ let neighborsValues []
+ set neighborsValues lput north-value neighborsValues
+ set neighborsValues lput west-value neighborsValues
+ set neighborsValues lput south-value neighborsValues
+ set neighborsValues lput east-value neighborsValues
+ let highest-value (last (sort neighborsValues))
+   ifelse(here-value < highest-value)[
+     ifelse (north-value = highest-value)[
+       north
+     ][
+      ifelse (west-value = highest-value)[
+       west
+      ][
+       ifelse (south-value = highest-value)[
+        south
+       ][
+        east
+        ]
+       ]
+      ]
+     ]
+   [
+     if(here-value = highest-value)[
+     let choice random 4
+     ifelse (choice = 3)[
+       north
+     ][ifelse (choice = 2)[
+       west
+      ][ifelse (choice = 1)[
+        south
+       ][
+       east
+       ]
+      ]
+     ]
+   ]
+   ]
 end
 
 ;; move-deterministic
@@ -518,7 +641,7 @@ end
 ;; what you have to write
 to move-deterministic
 if(initialized = 0)[
-  repeat 50 [
+  repeat 20 [
     update-board
   ]
   set initialized true
@@ -529,35 +652,33 @@ if(glitters?) [
    repeat 20 [
      update-board
    ]
- ]
-let neighborsValues []
- set neighborsValues lput north-value neighborsValues
- set neighborsValues lput west-value neighborsValues
- set neighborsValues lput south-value neighborsValues
- set neighborsValues lput east-value neighborsValues
-let highest-value (last (sort neighborsValues))
-  ifelse (north-value = highest-value)[
-    north
-  ][ ifelse (west-value = highest-value)[
-     west
-   ][ ifelse (south-value = highest-value)[
-      south
-    ][
-      east
-    ]
-   ]
-  ]
-   repeat 5 [
-     update-board
-   ]
-
+]
+repeat 10 [
+  update-board
+]
+do-move
 end
-
 ;; move-non-deterministic
 ;;
 ;; what you have to write
 to move-non-deterministic
-
+if(initialized = 0)[
+  repeat 100 [
+    update-board
+  ]
+  set initialized true
+]
+if(glitters?) [
+   grab-gold
+   ask patch-here [ set value -1]
+      repeat 20 [
+        update-board
+      ]
+]
+repeat 70 [
+  update-board
+]
+do-move
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -630,7 +751,7 @@ pits
 pits
 0
 20
-20
+15
 1
 1
 NIL
@@ -645,7 +766,7 @@ gold
 gold
 0
 10
-10
+9
 1
 1
 NIL
@@ -745,7 +866,7 @@ number-of-agents
 number-of-agents
 0
 10
-4
+1
 1
 1
 NIL
