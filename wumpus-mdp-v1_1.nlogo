@@ -30,10 +30,10 @@ globals [grabbed steps score renew?]
 ;; to store the value of the agent being in that state.
 ;;
 ;; you cam add additional attributes as you wish
-patches-own [am-pit? am-breezy? am-smelly? am-gold? am-wumpus? value policy]
+patches-own [am-pit? am-breezy? am-smelly? am-gold? am-wumpus? value utility-pushed-direction discovered-by-agent initialized]
 
 ;; here you can add state information to be used by the agent
-agents-own [previous-move initialized]
+agents-own [agent-value]
 
 ;;----------------------------------------------------------------------------
 ;;
@@ -102,7 +102,7 @@ to setup
   set-default-shape agents "person"
   set-default-shape wumpuses "monster"
   clear-all
-  set renew? false
+  set renew? true
   create-the-agents
   create-the-wumpus
   pick-pits
@@ -193,11 +193,13 @@ end
 ;; are only shown if the relevant switch is set.
 to color-patches
   ask patches [colour-by-value]
+
   if visible-breeze? [ask patches [if (am-breezy?) [set pcolor blue]]]
   ask patches [if (am-gold?) [set pcolor yellow]]
   ask patches [if (am-pit?) [set pcolor black]]
   if visible-smell? [ask patches [if (am-smelly?) [set pcolor brown]]]
 end
+
 
 ;; move-wumpus
 ;;
@@ -438,15 +440,46 @@ end
 ;; get-patch-utility
 ;;
 ;; what you have to write
-;; Not necessary implementation down below as an update method.
 to get-patch-utility
+;  update-board
+
+ifelse agent-move = "non-deterministic" [
+  repeat 70 [
+    update-board
+  ]
+][
+  repeat 40 [
+    update-board
+  ]
+]
+
 end
 
 ;; colour-by-value
 ;;
 ;; what you have to modify
 to colour-by-value
-  set pcolor green
+  ;; Generating coloration on the patches, the stronger the value the stronger the color ;;
+   let normalized-value 0 -(((value + 8 /  9 )- 2.2))
+   let patch-value normalized-value  * 10  + 4
+   ;; Different colors for a different set of future direction ;;
+   ifelse(discovered-by-agent > -1)[
+    set pcolor scale-color (red) patch-value (-10) 20
+   ][
+     ifelse (utility-pushed-direction = "↑")[
+       set pcolor scale-color (green) patch-value -10 20
+     ][
+      ifelse (utility-pushed-direction = "←")[
+       set pcolor scale-color (blue) patch-value -10 20
+      ][
+       ifelse (utility-pushed-direction = "↓")[
+       set pcolor scale-color (turquoise) patch-value -10 20
+       ][
+        set pcolor scale-color (violet) patch-value -10 20
+       ]
+      ]
+    ]
+   ]
 end
 
 ;;----------------------------------------------------------------------------
@@ -468,54 +501,63 @@ to move-agent
   ]
 end
 
+
 to update-board
+  ;-- A few settings --;
   let reward -0.01
   let gamma 0.98
   let next-round-patchs []
-  let is-non-deterministic false
   let left-wing-prob 0.1
   let right-wing-prob 0.1
   let action-prob 0.8
-  ask patches in-radius 30 [
+
+  ask patches [
+    ;; Allows us to make the tracks
+    if (initialized = 0)[
+      set discovered-by-agent -1
+      set initialized true
+    ]
+    ;; Configuration properties for deterministic and undeterministic
     default-set
+    ;; Since we do not want to changes taking effect on gold, pit, wumpus patches
     if(not am-pit? and not am-gold? and not am-wumpus?)[
-     let current-values []
-     ;; Current values with the ordering north 1, east 2, west 3, south 4
-     let order-news [-9999 -9999 -9999 -9999]
-     if ( agent-move = "non-deterministic") [
-      set order-news replace-item 0 order-news value
-      set order-news replace-item 0 order-news value
-      set order-news replace-item 0 order-news value
-      set order-news replace-item 0 order-news value
-     ]
+     ;; Current values with the ordering north 0, east 1, west 2, south 3
+     let order-news [-1 -1 -1 -1]
+     ; Replace the negative value which is an impossible move by the value of the current position, as it cannot move to there.
+       set order-news replace-item 0 order-news value
+       set order-news replace-item 1 order-news value
+       set order-news replace-item 2 order-news value
+       set order-news replace-item 3 order-news value
      ;;undeterministic current expected values
      let undet-exp-vals []
+
      let highest-value 0
      let currentx pxcor
      let currenty pycor
+
      ; If one of the neighbors is : x += 0 and y += 1 : north
      ; If one of the neighbors is : x += 1 and y += 0 : east
      ; If one of the neighbors is : x += -1 and y += 0 : west
      ; If one of the neighbors is : x += 0 and y += -1 : south
       ask neighbors4 [
-         ifelse ( pycor - currenty = 1)[
+         ifelse (pycor - currenty = 1)[
           set order-news replace-item 0 order-news value
          ][
-          ifelse ( pxcor - currentx = 1)[
+          ifelse (pxcor - currentx = 1)[
            set order-news replace-item 1 order-news value
           ][
-           if( pycor - currenty = -1)[
+           if(pycor - currenty = -1)[
              set order-news replace-item 3 order-news value
            ]
-           if( pxcor - currentx = -1)[
+           if(pxcor - currentx = -1)[
              set order-news replace-item 2 order-news value
            ]
           ]
          ]
       ]
       ;Similar to applying maxΣPR(s'|s,a)U(s') for non deterministic
-      ifelse ( agent-move = "non-deterministic") [
-       ; Replace the negative value which is an impossible move by the value of the current position, as it cannot move to there.
+      ifelse agent-move = "non-deterministic" [
+
        ;North estimation ex: 0.8*north + 0.1*west + 0.1*east
        set undet-exp-vals lput (action-prob * (item 0 order-news) + left-wing-prob * (item 2 order-news) + right-wing-prob * (item 1 order-news)) undet-exp-vals
        ;East estimation ex: 0.8*east + 0.1*north + 0.1*south
@@ -524,54 +566,61 @@ to update-board
        set undet-exp-vals lput (action-prob * (item 2 order-news) + left-wing-prob * (item 3 order-news) + right-wing-prob * (item 0 order-news)) undet-exp-vals
        ;South estimation ex: 0.8*south + 0.1*east + 0.1*west
        set undet-exp-vals lput (action-prob * (item 3 order-news) + left-wing-prob * (item 1 order-news) + right-wing-prob * (item 2 order-news)) undet-exp-vals
+       ;; Get us the max value being one of the above where percentages are distributed
        set highest-value (last (sort undet-exp-vals))
       ][
-       ; Similar to applying max(n,e,w,s) for deterministic
+       ; Similar to applying max(n,e,w,s) for deterministic, since there is a 100% chance that the move will be picked
        set highest-value (last (sort order-news))
       ]
+      ;; List where we add the current patch to a collection of other patches of this MDP round
       let current-patch []
       set current-patch lput pxcor current-patch
       set current-patch lput pycor current-patch
-      ; Bellman's equation
+
+      ; Applying Bellman's equation
       let bellman-value (reward + gamma * (highest-value))
 
+   ;Allows us to more visually give the future intended move knowing the influence of the Utility function
   ifelse agent-move = "non-deterministic" [
-     ifelse (precision (item 0 undet-exp-vals) 8 = precision highest-value 8)[
-       set policy "^"
+     ifelse ((item 0 undet-exp-vals) = highest-value)[
+       set utility-pushed-direction "↑"
      ][
-      ifelse (precision (item 2 undet-exp-vals) 8 = precision highest-value 8)[
-       set policy "<"
+      ifelse ((item 2 undet-exp-vals) = highest-value)[
+       set utility-pushed-direction "←"
       ][
-       ifelse (precision (item 3 undet-exp-vals) 8 = precision highest-value 8)[
-        set policy "v"
+       ifelse ((item 3 undet-exp-vals) = highest-value)[
+        set utility-pushed-direction "↓"
        ][
-        set policy ">"
+        set utility-pushed-direction "→"
+        ]
+       ]
+      ]
+  ][
+     ifelse ((item 0 order-news) = highest-value)[
+       set utility-pushed-direction "↑"
+     ][
+      ifelse ((item 2 order-news) = highest-value)[
+       set utility-pushed-direction "←"
+      ][
+       ifelse ((item 3 order-news) = highest-value)[
+        set utility-pushed-direction "↓"
+       ][
+        set utility-pushed-direction "→"
         ]
        ]
       ]
 
-  ][
-   ifelse (precision highest-value 8 = precision (item 0 order-news) 8)[
-     set policy "^"
-   ][
-    ifelse (precision highest-value 8 = precision (item 2 order-news) 8)[
-      set policy "<"
-    ][
-     ifelse (precision highest-value 8 = precision (item 3 order-news) 8)[
-       set policy "v"
-     ][
-      set policy ">"
-     ]
-    ]
-   ]
   ]
-      set plabel policy
+     ; For estetic reason we are showing the label attached to the patch ;
+      set plabel utility-pushed-direction
+      ;Associating the bellman equation to the patch;
       set current-patch lput bellman-value current-patch
+      ;Storing this calculated patch to a list;
       set next-round-patchs lput current-patch next-round-patchs
     ]
   ]
 
-  ask patches in-radius 30 [
+  ask patches [
     if(not am-pit? and not am-gold? and not am-wumpus?)[
       foreach next-round-patchs [
         if( (item 0 ? = pxcor) and item 1 ? = pycor)[
@@ -583,48 +632,71 @@ to update-board
 end
 
 to default-set
-
-ifelse agent-move = "non-deterministic" [
- if(am-pit?)[
-   set value (-2)
+  multi-agent-path
+;-- Setting default values to the "unchanging" patches --;
+  if(am-gold?)[
+    set value (1)
+  ]
+  ifelse agent-move = "non-deterministic" [
+    if(am-pit?)[
+      set value (-2)
+    ]
+    if(am-wumpus?)[
+      set value (-2)
+    ]
+  ][
+   if(am-pit?)[
+     set value (-8)
+   ]
+   if(am-wumpus?)[
+     set value (-6)
+   ]
  ]
- if(am-wumpus?)[
-   set value (-2)
- ]
- if(am-gold?)[
-   set value (1)
- ]
-][
- if(am-pit?)[
-   set value (-8)
- ]
- if(am-wumpus?)[
-   set value (-6)
- ]
- if(am-gold?)[
-   set value (1)
- ]
-
-]
 end
 
+to multi-agent-path
+;--- Pushing in a Multi-Agent environment the agents to move in seperate ways, as well as not standing were they are (with the help of MDP). ---;
+  let patchcorx pxcor
+  let patchcory pycor
+  let agent-on-patch -1
+  let nb-of-agents 0
+  ask agents [
+    if ( patchcorx  = pxcor and patchcory = pycor )[
+      set agent-on-patch who
+    ]
+    set nb-of-agents nb-of-agents + 1
+  ]
+; --- This also allows us to display the tracks of the agents -- ;
+  if agent-on-patch > -1 [
+    set discovered-by-agent agent-on-patch
+   if nb-of-agents > 1 [
+      set value ( value - 2 )
+    ]
+  ]
+; ----------------------------------------------------------------------------------------------------------------------------------- ;
+end
+
+;; Method called by the agent to choose which is the most appropriate futur move.
 to do-move
  let neighborsValues []
+ ; -- Simply written for undeterministic  --;
  ifelse agent-move = "non-deterministic" [
-     ifelse (policy = "^")[
+     ifelse (utility-pushed-direction = "↑")[
        north
      ][
-      ifelse (policy = "<")[
+      ifelse (utility-pushed-direction = "←")[
        west
       ][
-       ifelse (policy = "v")[
+       ifelse (utility-pushed-direction = "↓")[
         south
        ][
         east
-        ]
        ]
       ]
- ][
+    ]
+ ]
+ [
+ ; -- Written differently but having the same outcome as if written above --;
  set neighborsValues lput north-value neighborsValues
  set neighborsValues lput west-value neighborsValues
  set neighborsValues lput south-value neighborsValues
@@ -663,50 +735,23 @@ to do-move
    ]
  ]
 end
-
+;; --- Both very similar a part from the set value for once a gold has been picked up from a patch ---;
 ;; move-deterministic
-;;
-;; what you have to write
 to move-deterministic
-if(initialized = 0)[
-  repeat 20 [
-    update-board
-  ]
-  set initialized true
-]
+do-move
 if(glitters?) [
    grab-gold
    ask patch-here [ set value 0]
-   repeat 20 [
-     update-board
-   ]
 ]
-repeat 10 [
-  update-board
-]
-do-move
 end
+
 ;; move-non-deterministic
-;;
-;; what you have to write
 to move-non-deterministic
-if(initialized = 0)[
-  repeat 50 [
-    update-board
-  ]
-  set initialized true
-]
+do-move
 if(glitters?) [
    grab-gold
    ask patch-here [ set value -1]
-      repeat 70 [
-        update-board
-      ]
 ]
-repeat 20 [
-  update-board
-]
-do-move
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -779,7 +824,7 @@ pits
 pits
 0
 20
-15
+20
 1
 1
 NIL
@@ -794,7 +839,7 @@ gold
 gold
 0
 10
-9
+1
 1
 1
 NIL
