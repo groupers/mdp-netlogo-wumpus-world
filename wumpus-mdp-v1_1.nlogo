@@ -481,7 +481,13 @@ to update-board
     if(not am-pit? and not am-gold? and not am-wumpus?)[
      let current-values []
      ;; Current values with the ordering north 1, east 2, west 3, south 4
-     let order-news [-1 -1 -1 -1]
+     let order-news [-9999 -9999 -9999 -9999]
+     if ( agent-move = "non-deterministic") [
+      set order-news replace-item 0 order-news value
+      set order-news replace-item 0 order-news value
+      set order-news replace-item 0 order-news value
+      set order-news replace-item 0 order-news value
+     ]
      ;;undeterministic current expected values
      let undet-exp-vals []
      let highest-value 0
@@ -492,41 +498,24 @@ to update-board
      ; If one of the neighbors is : x += -1 and y += 0 : west
      ; If one of the neighbors is : x += 0 and y += -1 : south
       ask neighbors4 [
-        ifelse agent-move = "non-deterministic" [
-          set is-non-deterministic true
-         ifelse (pycor - currenty = 1)[
+         ifelse ( pycor - currenty = 1)[
           set order-news replace-item 0 order-news value
          ][
-          ifelse (pxcor - currentx = 1)[
+          ifelse ( pxcor - currentx = 1)[
            set order-news replace-item 1 order-news value
           ][
-           if(pycor - currenty = -1)[
-             set order-news replace-item 2 order-news value
-           ]
-           if(pxcor - currentx = 1)[
+           if( pycor - currenty = -1)[
              set order-news replace-item 3 order-news value
+           ]
+           if( pxcor - currentx = -1)[
+             set order-news replace-item 2 order-news value
            ]
           ]
          ]
-        ][
-        set current-values lput value current-values
-        ]
       ]
       ;Similar to applying maxΣPR(s'|s,a)U(s') for non deterministic
-      ifelse (is-non-deterministic) [
+      ifelse ( agent-move = "non-deterministic") [
        ; Replace the negative value which is an impossible move by the value of the current position, as it cannot move to there.
-       if(item 0 order-news = -1)[
-         set order-news replace-item 0 order-news value
-       ]
-       if(item 1 order-news = -1)[
-         set order-news replace-item 1 order-news value
-       ]
-       if(item 2 order-news = -1)[
-         set order-news replace-item 2 order-news value
-       ]
-       if(item 3 order-news = -1)[
-         set order-news replace-item 3 order-news value
-       ]
        ;North estimation ex: 0.8*north + 0.1*west + 0.1*east
        set undet-exp-vals lput (action-prob * (item 0 order-news) + left-wing-prob * (item 2 order-news) + right-wing-prob * (item 1 order-news)) undet-exp-vals
        ;East estimation ex: 0.8*east + 0.1*north + 0.1*south
@@ -538,7 +527,7 @@ to update-board
        set highest-value (last (sort undet-exp-vals))
       ][
        ; Similar to applying max(n,e,w,s) for deterministic
-       set highest-value (last (sort current-values))
+       set highest-value (last (sort order-news))
       ]
       let current-patch []
       set current-patch lput pxcor current-patch
@@ -546,20 +535,35 @@ to update-board
       ; Bellman's equation
       let bellman-value (reward + gamma * (highest-value))
 
-  if agent-move = "non-deterministic" [
-     ifelse ((item 0 undet-exp-vals) = highest-value)[
+  ifelse agent-move = "non-deterministic" [
+     ifelse (precision (item 0 undet-exp-vals) 8 = precision highest-value 8)[
        set policy "^"
      ][
-      ifelse ((item 2 undet-exp-vals) = highest-value)[
+      ifelse (precision (item 2 undet-exp-vals) 8 = precision highest-value 8)[
        set policy "<"
       ][
-       ifelse ((item 3 undet-exp-vals) = highest-value)[
+       ifelse (precision (item 3 undet-exp-vals) 8 = precision highest-value 8)[
         set policy "v"
        ][
         set policy ">"
         ]
        ]
       ]
+
+  ][
+   ifelse (precision highest-value 8 = precision (item 0 order-news) 8)[
+     set policy "^"
+   ][
+    ifelse (precision highest-value 8 = precision (item 2 order-news) 8)[
+      set policy "<"
+    ][
+     ifelse (precision highest-value 8 = precision (item 3 order-news) 8)[
+       set policy "v"
+     ][
+      set policy ">"
+     ]
+    ]
+   ]
   ]
       set plabel policy
       set current-patch lput bellman-value current-patch
@@ -580,24 +584,47 @@ end
 
 to default-set
 
+ifelse agent-move = "non-deterministic" [
+ if(am-pit?)[
+   set value (-2)
+ ]
+ if(am-wumpus?)[
+   set value (-2)
+ ]
+ if(am-gold?)[
+   set value (1)
+ ]
+][
  if(am-pit?)[
    set value (-8)
  ]
  if(am-wumpus?)[
    set value (-6)
  ]
-
  if(am-gold?)[
-   ifelse agent-move = "non-deterministic" [
-    set value (0)
-   ][
-    set value (1)
-   ]
+   set value (1)
  ]
+
+]
 end
 
 to do-move
  let neighborsValues []
+ ifelse agent-move = "non-deterministic" [
+     ifelse (policy = "^")[
+       north
+     ][
+      ifelse (policy = "<")[
+       west
+      ][
+       ifelse (policy = "v")[
+        south
+       ][
+        east
+        ]
+       ]
+      ]
+ ][
  set neighborsValues lput north-value neighborsValues
  set neighborsValues lput west-value neighborsValues
  set neighborsValues lput south-value neighborsValues
@@ -619,7 +646,7 @@ to do-move
       ]
      ]
    [
-     if(here-value = highest-value)[
+     if(here-value = highest-value and highest-value = west-value = south-value = east-value = south-value)[
      let choice random 4
      ifelse (choice = 3)[
        north
@@ -634,6 +661,7 @@ to do-move
      ]
    ]
    ]
+ ]
 end
 
 ;; move-deterministic
@@ -663,7 +691,7 @@ end
 ;; what you have to write
 to move-non-deterministic
 if(initialized = 0)[
-  repeat 100 [
+  repeat 50 [
     update-board
   ]
   set initialized true
@@ -671,11 +699,11 @@ if(initialized = 0)[
 if(glitters?) [
    grab-gold
    ask patch-here [ set value -1]
-      repeat 20 [
+      repeat 70 [
         update-board
       ]
 ]
-repeat 70 [
+repeat 20 [
   update-board
 ]
 do-move
@@ -780,7 +808,7 @@ CHOOSER
 agent-move
 agent-move
 "deterministic" "non-deterministic"
-0
+1
 
 SWITCH
 19
@@ -855,7 +883,7 @@ CHOOSER
 value-iteration
 value-iteration
 "deterministic" "non-deterministic"
-0
+1
 
 SLIDER
 18
